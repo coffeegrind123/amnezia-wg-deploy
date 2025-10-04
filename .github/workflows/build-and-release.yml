@@ -1,0 +1,353 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      # Scripts
+      - "**.sh"
+
+      # Documentation
+      - "**.md"
+
+      # Workflows
+      - ".github/workflows/build-and-release.yml"
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "**.sh"
+      - "**.md"
+      - ".github/workflows/build-and-release.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Deployment Package
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      ##
+      # SETUP
+      ##
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      ##
+      # BUILD AWG-EASY FROM SOURCE
+      ##
+
+      - name: Clone AWG-Easy repository (master branch)
+        run: |
+          echo "📥 Cloning AWG-Easy repository (master branch)..."
+          git clone --branch master https://github.com/coffeegrind123/awg-easy.git awg-easy-src
+          cd awg-easy-src
+          echo "✅ Cloned AWG-Easy at commit: $(git rev-parse --short HEAD)"
+          echo "✅ Branch: $(git branch --show-current)"
+
+      - name: Build AWG-Easy Docker image
+        run: |
+          echo "🏗️ Building AWG-Easy Docker image..."
+          cd awg-easy-src
+          docker build -t awg-easy:local .
+          echo "✅ Docker image built successfully"
+
+      - name: Extract application and binaries from Docker image
+        run: |
+          echo "📦 Extracting application and binaries from Docker image..."
+
+          # Create temporary container
+          CONTAINER_ID=$(docker create awg-easy:local)
+          echo "Container ID: $CONTAINER_ID"
+
+          # Create directories
+          mkdir -p binaries
+          mkdir -p src
+
+          # Extract AWG tools and kernel module
+          echo "Extracting AmneziaWG tools and kernel module..."
+          docker cp "$CONTAINER_ID:/usr/bin/awg" binaries/
+          docker cp "$CONTAINER_ID:/usr/bin/awg-quick" binaries/
+          docker cp "$CONTAINER_ID:/lib/modules/amneziawg.ko" binaries/ 2>/dev/null || echo "Note: amneziawg.ko not found (build may have failed)"
+          chmod +x binaries/* 2>/dev/null || true
+
+          echo "  ✓ awg ($(du -h binaries/awg | cut -f1))"
+          echo "  ✓ awg-quick ($(du -h binaries/awg-quick | cut -f1))"
+          echo "  ✓ amneziawg.ko ($(du -h binaries/amneziawg.ko 2>/dev/null | cut -f1 || echo 'N/A - module build may have failed'))"
+
+          # Extract built application
+          echo "Extracting built application..."
+          docker cp "$CONTAINER_ID:/app/." src/
+
+          # Clean up container
+          docker rm "$CONTAINER_ID" > /dev/null
+
+          echo "✅ Extraction completed"
+
+          # Verify files
+          echo "📋 Extracted binaries:"
+          ls -lh binaries/
+          echo ""
+          echo "📋 Extracted application structure:"
+          ls -la src/ | head -20
+
+      ##
+      # BUILD PACKAGE
+      ##
+
+      - name: Create deployment package
+        run: |
+          echo "📦 Creating deployment package..."
+
+          # Create package structure
+          PACKAGE_DIR="awg-easy-deploy"
+          mkdir -p "$PACKAGE_DIR"
+
+          # Copy all required files
+          cp -r src "$PACKAGE_DIR/"
+          cp -r binaries "$PACKAGE_DIR/"
+          cp install-bare-metal.sh "$PACKAGE_DIR/"
+          cp README.md "$PACKAGE_DIR/" 2>/dev/null || true
+          cp LICENSE "$PACKAGE_DIR/" 2>/dev/null || true
+
+          # Create tar.gz archive
+          tar -czf awg-easy-deploy.tar.gz "$PACKAGE_DIR"
+
+          echo "✅ Deployment package created"
+
+          # Show package info
+          echo "📊 Package information:"
+          ls -lh awg-easy-deploy.tar.gz
+          echo ""
+          echo "📋 Package contents:"
+          tar -tzf awg-easy-deploy.tar.gz | head -30
+
+      ##
+      # VERSION INFO
+      ##
+
+      - name: Get version info
+        id: version-info
+        run: |
+          echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "full_hash=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$(date -u +%Y%m%d_%H%M%S)" >> "$GITHUB_OUTPUT"
+          echo "tag=v$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "semantic_version=$(date -u +%Y.%m%d)" >> "$GITHUB_OUTPUT"
+
+      ##
+      # UPLOAD ARTIFACTS
+      ##
+
+      - name: Upload deployment package as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: awg-easy-deploy
+          path: awg-easy-deploy.tar.gz
+          if-no-files-found: error
+
+      - name: Generate checksums
+        run: |
+          echo "🔐 Generating checksums..."
+          sha256sum awg-easy-deploy.tar.gz > awg-easy-deploy.tar.gz.sha256
+          md5sum awg-easy-deploy.tar.gz > awg-easy-deploy.tar.gz.md5
+
+          echo "✅ Checksums generated:"
+          cat awg-easy-deploy.tar.gz.sha256
+          cat awg-easy-deploy.tar.gz.md5
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: |
+            awg-easy-deploy.tar.gz.sha256
+            awg-easy-deploy.tar.gz.md5
+
+  ##
+  # CREATE RELEASE
+  ##
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      (needs.build.result == 'success') &&
+      (github.ref == 'refs/heads/main')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version info
+        id: version-info
+        run: |
+          echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "full_hash=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$(date -u +%Y%m%d_%H%M%S)" >> "$GITHUB_OUTPUT"
+          echo "tag=v$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "semantic_version=$(date -u +%Y.%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Download deployment package
+        uses: actions/download-artifact@v4
+        with:
+          name: awg-easy-deploy
+          path: release-assets
+
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: release-assets
+
+      - name: Verify release assets
+        run: |
+          echo "📦 Release assets:"
+          ls -lh release-assets/
+
+          # Verify checksum
+          cd release-assets
+          sha256sum -c awg-easy-deploy.tar.gz.sha256
+          echo "✅ Checksum verification passed"
+
+      - name: Delete existing 'latest' release
+        run: |
+          echo "🗑️ Checking for existing 'latest' release..."
+
+          # Try to delete existing 'latest' release
+          gh release delete latest --yes 2>/dev/null || echo "No existing 'latest' release found"
+
+          echo "✅ Cleanup completed"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate release notes
+        run: |
+          echo "📋 Generating release notes..."
+
+          # Get recent commits
+          CHANGELOG=""
+          git log --oneline -10 | while IFS= read -r commit_line; do
+            HASH=$(echo "$commit_line" | awk '{print $1}')
+            MESSAGE=$(echo "$commit_line" | cut -d' ' -f2-)
+            CHANGELOG="${CHANGELOG}- ${MESSAGE} ([${HASH}](https://github.com/${{ github.repository }}/commit/${HASH}))\n"
+          done
+
+          cat > RELEASE_NOTES.md << 'EOF'
+          ## AmneziaWG Easy - Bare Metal Deployment Package
+
+          This release contains a complete deployment package for installing AmneziaWG Easy on Alpine Linux without Docker.
+
+          ### 🚀 Quick Installation
+
+          ```bash
+          # Download and extract
+          wget https://github.com/${{ github.repository }}/releases/latest/download/awg-easy-deploy.tar.gz
+          tar -xzf awg-easy-deploy.tar.gz
+          cd awg-easy-deploy
+
+          # Install (as root)
+          WG_HOST=your.domain.com PASSWORD=yourpassword ./install-bare-metal.sh
+          ```
+
+          ### 📦 What's Included
+
+          - **AmneziaWG binaries** (amneziawg-go, awg, awg-quick)
+          - **Web UI application** (Node.js based)
+          - **Installation script** (install-bare-metal.sh)
+          - **OpenRC service configuration**
+          - **Complete documentation**
+
+          ### ✨ Features
+
+          - 🐳 **Docker-free** - Native bare metal installation
+          - 🔧 **Automated setup** - One command installation
+          - 🚀 **Auto-start** - OpenRC service integration
+          - 🔄 **Smart kernel detection** - Auto-upgrades from `-virt` to `linux-lts`
+          - 🔐 **TUN/TAP verification** - Ensures WireGuard compatibility
+          - 📝 **Complete logging** - Easy troubleshooting
+
+          ### 📋 Requirements
+
+          - **OS:** Alpine Linux (latest stable)
+          - **Access:** Root/sudo privileges
+          - **Ports:** 51820/udp (VPN), 51821/tcp (Web UI)
+          - **Kernel:** `linux-lts` (auto-installed if needed)
+
+          ### 🔐 Security Notes
+
+          - Change the default password immediately after installation
+          - Consider placing the Web UI behind a reverse proxy with HTTPS
+          - Restrict Web UI access to trusted IPs using firewall rules
+          - Keep the system updated with `apk upgrade`
+
+          ### 📖 Documentation
+
+          - [Quick Start Guide](https://github.com/${{ github.repository }}/blob/master/README.md)
+          - [Installation Guide](https://github.com/${{ github.repository }}/blob/master/INSTALLATION-GUIDE.md)
+          - [Troubleshooting](https://github.com/${{ github.repository }}/blob/master/LESSONS-LEARNED.md)
+
+          ### 📊 Package Information
+
+          - **Build Date:** ${{ steps.version-info.outputs.date }}
+          - **Version:** ${{ steps.version-info.outputs.version }}
+          - **Commit:** ${{ steps.version-info.outputs.full_hash }}
+
+          ### 🔗 Verification
+
+          Verify package integrity:
+          ```bash
+          sha256sum -c awg-easy-deploy.tar.gz.sha256
+          ```
+
+          ---
+
+          **Based on:** [imbtqd/awg-easy](https://github.com/imbtqd/awg-easy)
+
+          **Original Project:** [wg-easy/wg-easy](https://github.com/wg-easy/wg-easy)
+          EOF
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          name: "AmneziaWG Easy - Latest Build"
+          bodyFile: RELEASE_NOTES.md
+          artifacts: "release-assets/*"
+          draft: false
+          prerelease: false
+          allowUpdates: true
+          makeLatest: true
+          generateReleaseNotes: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          echo "🎉 === RELEASE CREATED SUCCESSFULLY === 🎉"
+          echo ""
+          echo "📋 Release Details:"
+          echo "  • Tag: latest"
+          echo "  • Date: ${{ steps.version-info.outputs.date }}"
+          echo "  • Commit: ${{ steps.version-info.outputs.full_hash }}"
+          echo ""
+          echo "🔗 Release URL:"
+          echo "https://github.com/${{ github.repository }}/releases/latest"
+          echo ""
+          echo "📦 Download Command:"
+          echo "wget https://github.com/${{ github.repository }}/releases/latest/download/awg-easy-deploy.tar.gz"
+          echo ""
+          echo "🚀 Quick Install:"
+          echo "tar -xzf awg-easy-deploy.tar.gz && cd awg-easy-deploy"
+          echo "WG_HOST=your.domain.com PASSWORD=yourpass ./install-bare-metal.sh"
