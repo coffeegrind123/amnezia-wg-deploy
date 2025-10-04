@@ -111,7 +111,7 @@ jobs:
           # Copy all required files
           cp -r src "$PACKAGE_DIR/"
           cp -r binaries "$PACKAGE_DIR/"
-          cp install-bare-metal.sh "$PACKAGE_DIR/"
+          cp install.sh "$PACKAGE_DIR/"
           cp README.md "$PACKAGE_DIR/" 2>/dev/null || true
           cp LICENSE "$PACKAGE_DIR/" 2>/dev/null || true
 
@@ -259,14 +259,14 @@ jobs:
           cd awg-easy-deploy
 
           # Install (as root)
-          WG_HOST=your.domain.com PASSWORD=yourpassword ./install-bare-metal.sh
+          WG_HOST=your.domain.com PASSWORD=yourpassword ./install.sh
           ```
 
           ### 📦 What's Included
 
           - **AmneziaWG binaries** (amneziawg-go, awg, awg-quick)
           - **Web UI application** (Node.js based)
-          - **Installation script** (install-bare-metal.sh)
+          - **Installation script** (install.sh)
           - **OpenRC service configuration**
           - **Complete documentation**
 
@@ -350,4 +350,4 @@ jobs:
           echo ""
           echo "🚀 Quick Install:"
           echo "tar -xzf awg-easy-deploy.tar.gz && cd awg-easy-deploy"
-          echo "WG_HOST=your.domain.com PASSWORD=yourpass ./install-bare-metal.sh"
+          echo "WG_HOST=your.domain.com PASSWORD=yourpass ./install.sh"
