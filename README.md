@@ -13,7 +13,7 @@ tar -xzf awg-easy-deploy.tar.gz
 cd awg-easy-deploy
 
 # Unattended setup (recommended)
-WG_HOST=vpn.example.com PASSWORD='your-password' ./install.sh
+WG_HOST=vpn.example.com PASSWORD='your-password' WG_PORT=51820 WEB_PORT=51821 ./install.sh
 
 # Or interactive setup (web UI wizard)
 ./install.sh
@@ -110,26 +110,3 @@ tar -xzf awg-easy-deploy.tar.gz
 cd awg-easy-deploy
 WG_HOST=vpn.example.com PASSWORD='password' ./install.sh
 ```
-
-## How AmneziaWG Works
-
-This version uses the **AmneziaWG kernel module** (`amneziawg.ko`) pre-compiled for Alpine LTS kernel 6.12.50:
-- **Automatic detection**: Application detects `amneziawg` kernel module via `modinfo` and uses AWG tools (`awg`, `awg-quick`)
-- **Fallback support**: If kernel module not available, uses standard WireGuard (`wg`, `wg-quick`)
-- **Web UI**: Full support for configuring obfuscation parameters when AWG is active (Jc, Jmin, Jmax, S1-S4, H1-H4, I1-I5, J1-J3, Itime)
-- **Better performance**: Kernel module provides 10-30% better CPU efficiency
-
-**How detection works:**
-1. On startup, app runs `modinfo amneziawg` to check if kernel module is loaded
-2. If found: Uses AWG commands and shows obfuscation UI
-3. If not found: Uses standard WireGuard commands, UI shows AWG is not active
-
-## Credits
-
-Based on [wg-easy](https://github.com/wg-easy/wg-easy) by Emile Nijssen
-AmneziaWG fork: [imbtqd/awg-easy](https://github.com/imbtqd/awg-easy)
-AmneziaWG core: [amnezia-vpn/amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go)
-
-## License
-
-GPL-3.0-only
